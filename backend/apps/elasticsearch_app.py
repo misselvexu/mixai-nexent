@@ -4,10 +4,11 @@ from fastapi import HTTPException, Query, Body, Path, Depends, APIRouter, Header
 from consts.model import IndexingResponse, SearchRequest, HybridSearchRequest, ChangeSummaryRequest
 
 from nexent.vector_database.elasticsearch_core import ElasticSearchCore
-from services.elasticsearch_service import ElasticSearchService, get_es_core
+from services.elasticsearch_service import ElasticSearchService, get_es
 from services.redis_service import get_redis_service
 from utils.auth_utils import get_current_user_id
 from services.tenant_config_service import delete_selected_knowledge_by_index_name
+from consts.const import ES_API_KEY, ES_HOST
 
 router = APIRouter(prefix="/indices")
 service = ElasticSearchService()
@@ -16,12 +17,20 @@ service = ElasticSearchService()
 def create_new_index(
         index_name: str = Path(..., description="Name of the index to create"),
         embedding_dim: Optional[int] = Query(None, description="Dimension of the embedding vectors"),
-        es_core: ElasticSearchCore = Depends(get_es_core),
         authorization: Optional[str] = Header(None)
 ):
     """Create a new vector index and store it in the knowledge table"""
     try:
         user_id, tenant_id = get_current_user_id(authorization)
+        es_core = ElasticSearchCore(
+            host=ES_HOST,
+            api_key=ES_API_KEY,
+            embedding_model=None,
+            verify_certs=False,
+            ssl_show_warn=False,
+        )
+        es_core.embedding_model = get_es(tenant_id)
+
         return ElasticSearchService.create_index(index_name, embedding_dim, es_core, user_id, tenant_id)
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Error creating index: {str(e)}")
@@ -30,12 +39,19 @@ def create_new_index(
 @router.delete("/{index_name}")
 def delete_index(
         index_name: str = Path(..., description="Name of the index to delete"),
-        es_core: ElasticSearchCore = Depends(get_es_core),
         authorization: Optional[str] = Header(None)
 ):
     """Delete an index and clean up all related Redis records"""
     try:
         user_id, tenant_id = get_current_user_id(authorization)
+        es_core = ElasticSearchCore(
+            host=ES_HOST,
+            api_key=ES_API_KEY,
+            embedding_model=None,
+            verify_certs=False,
+            ssl_show_warn=False,
+        )
+        es_core.embedding_model = get_es(tenant_id)
         # delete the selected knowledge by index name
         delete_selected_knowledge_by_index_name(tenant_id=tenant_id, user_id=user_id, index_name=index_name)
         # First delete the index using existing service
@@ -77,12 +93,19 @@ def delete_index(
 def get_list_indices(
         pattern: str = Query("*", description="Pattern to match index names"),
         include_stats: bool = Query(False, description="Whether to include index stats"),
-        es_core: ElasticSearchCore = Depends(get_es_core),
         authorization: Optional[str] = Header(None),
 ):
     """List all user indices with optional stats"""
     try:
         user_id, tenant_id = get_current_user_id(authorization)
+        es_core = ElasticSearchCore(
+            host=ES_HOST,
+            api_key=ES_API_KEY,
+            embedding_model=None,
+            verify_certs=False,
+            ssl_show_warn=False,
+        )
+        es_core.embedding_model = get_es(tenant_id)
         return ElasticSearchService.list_indices(pattern, include_stats, user_id, tenant_id, es_core)
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Error get index: {str(e)}")
@@ -91,10 +114,19 @@ def get_list_indices(
 @router.get("/{index_name}/info")
 def get_es_index_info(
         index_name: str = Path(..., description="Name of the index"),
-        es_core: ElasticSearchCore = Depends(get_es_core)
+        authorization: Optional[str] = Header(None),
 ):
     """Get comprehensive information about an index including stats, fields, sources and process info"""
     try:
+        user_id, tenant_id = get_current_user_id(authorization)
+        es_core = ElasticSearchCore(
+            host=ES_HOST,
+            api_key=ES_API_KEY,
+            embedding_model=None,
+            verify_certs=False,
+            ssl_show_warn=False,
+        )
+        es_core.embedding_model = get_es(tenant_id)
         return ElasticSearchService.get_index_info(index_name, es_core)
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"{str(e)}")
@@ -105,13 +137,23 @@ def get_es_index_info(
 def create_index_documents(
         index_name: str = Path(..., description="Name of the index"),
         data: List[Dict[str, Any]] = Body(..., description="Document List to process"),
-        es_core: ElasticSearchCore = Depends(get_es_core)
+        authorization: Optional[str] = Header(None),
 ):
     """
     Index documents with embeddings, creating the index if it doesn't exist.
     Accepts an document list from data processing.
     """
     try:
+        user_id, tenant_id = get_current_user_id(authorization)
+        es_core = ElasticSearchCore(
+            host=ES_HOST,
+            api_key=ES_API_KEY,
+            embedding_model=None,
+            verify_certs=False,
+            ssl_show_warn=False,
+        )
+        es_core.embedding_model = get_es(tenant_id)
+        print(es_core.embedding_model)
         return ElasticSearchService.index_documents(index_name, data, es_core)
     except Exception as e:
         error_msg = str(e)
@@ -123,10 +165,19 @@ def create_index_documents(
 async def get_index_files(
         index_name: str = Path(..., description="Name of the index"),
         search_redis: bool = Query(True, description="Whether to search Redis to get incomplete files"),
-        es_core: ElasticSearchCore = Depends(get_es_core)
+        authorization: Optional[str] = Header(None)
 ):
     """Get all files from an index, including those that are not yet stored in ES"""
     try:
+        user_id, tenant_id = get_current_user_id(authorization)
+        es_core = ElasticSearchCore(
+            host=ES_HOST,
+            api_key=ES_API_KEY,
+            embedding_model=None,
+            verify_certs=False,
+            ssl_show_warn=False,
+        )
+        es_core.embedding_model = get_es(tenant_id)
         result = await ElasticSearchService.list_files(index_name, include_chunks=False, search_redis=search_redis, es_core=es_core)
         # Transform result to match frontend expectations
         return {
@@ -143,12 +194,21 @@ async def get_index_files(
 def delete_documents(
         index_name: str = Path(..., description="Name of the index"),
         path_or_url: str = Query(..., description="Path or URL of documents to delete"),
-        es_core: ElasticSearchCore = Depends(get_es_core)
+        authorization: Optional[str] = Header(None)
 ):
     """Delete documents by path or URL and clean up related Redis records"""
     try:
+        user_id, tenant_id = get_current_user_id(authorization)
+        es_core = ElasticSearchCore(
+            host=ES_HOST,
+            api_key=ES_API_KEY,
+            embedding_model=None,
+            verify_certs=False,
+            ssl_show_warn=False,
+        )
+        es_core.embedding_model = get_es(tenant_id)
         # First delete the documents using existing service
-        result = ElasticSearchService.delete_documents(index_name, path_or_url, es_core)
+        result = ElasticSearchService.delete_documents(index_name, path_or_url, es_core, tenant_id)
 
         # Then clean up Redis records related to this specific document
         try:
@@ -191,11 +251,20 @@ def delete_documents(
 @router.post("/search/accurate")
 def accurate_search(
         request: SearchRequest = Body(..., description="Search request parameters"),
-        es_core: ElasticSearchCore = Depends(get_es_core)
+        authorization: Optional[str] = Header(None)
 ):
     """Search for documents using fuzzy text matching across multiple indices"""
     try:
-      return ElasticSearchService.accurate_search(request, es_core)
+        user_id, tenant_id = get_current_user_id(authorization)
+        es_core = ElasticSearchCore(
+            host=ES_HOST,
+            api_key=ES_API_KEY,
+            embedding_model=None,
+            verify_certs=False,
+            ssl_show_warn=False,
+        )
+        es_core.embedding_model = get_es(tenant_id)
+        return ElasticSearchService.accurate_search(request, es_core)
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"{str(e)}")
 
@@ -203,9 +272,18 @@ def accurate_search(
 @router.post("/search/semantic")
 def semantic_search(
         request: SearchRequest = Body(..., description="Search request parameters"),
-        es_core: ElasticSearchCore = Depends(get_es_core)
+        authorization: Optional[str] = Header(None)
 ):
     """Search for similar documents using vector similarity across multiple indices"""
+    user_id, tenant_id = get_current_user_id(authorization)
+    es_core = ElasticSearchCore(
+        host=ES_HOST,
+        api_key=ES_API_KEY,
+        embedding_model=None,
+        verify_certs=False,
+        ssl_show_warn=False,
+    )
+    es_core.embedding_model = get_es(tenant_id)
     try:
        return ElasticSearchService.semantic_search(request, es_core)
     except Exception as e:
@@ -215,10 +293,19 @@ def semantic_search(
 @router.post("/search/hybrid")
 def hybrid_search(
         request: HybridSearchRequest = Body(..., description="Hybrid search request parameters"),
-        es_core: ElasticSearchCore = Depends(get_es_core)
+        authorization: Optional[str] = Header(None)
 ):
     """Search for similar documents using hybrid search across multiple indices"""
     try:
+        user_id, tenant_id = get_current_user_id(authorization)
+        es_core = ElasticSearchCore(
+            host=ES_HOST,
+            api_key=ES_API_KEY,
+            embedding_model=None,
+            verify_certs=False,
+            ssl_show_warn=False,
+        )
+        es_core.embedding_model = get_es(tenant_id)
         return ElasticSearchService.hybrid_search(request, es_core)
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Error during hybrid search: {str(e)}")
@@ -226,10 +313,19 @@ def hybrid_search(
 
 # Health check
 @router.get("/health")
-def health_check(es_core: ElasticSearchCore = Depends(get_es_core)):
+def health_check(authorization: Optional[str] = Header(None)):
     """Check API and Elasticsearch health"""
     try:
         # Try to list indices as a health check
-        return ElasticSearchService.health_check(es_core)
+        user_id, tenant_id = get_current_user_id(authorization)
+        es_core = ElasticSearchCore(
+            host=ES_HOST,
+            api_key=ES_API_KEY,
+            embedding_model=None,
+            verify_certs=False,
+            ssl_show_warn=False,
+        )
+        es_core.embedding_model = get_es(tenant_id)
+        return ElasticSearchService.health_check(es_core, tenant_id)
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"{str(e)}")

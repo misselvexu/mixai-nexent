@@ -18,7 +18,9 @@ class KnowledgeBaseService {
       console.log("强制刷新健康检查，不使用缓存");
       this.healthCheckCache = null; // 清除缓存
 
-      const response = await fetch(API_ENDPOINTS.knowledgeBase.health);
+      const response = await fetch(API_ENDPOINTS.knowledgeBase.health, {
+        headers: getAuthHeaders(),
+      });
       const data = await response.json();
       
       const isHealthy = data.status === "healthy" && data.elasticsearch === "connected";
@@ -198,7 +200,9 @@ class KnowledgeBaseService {
   // searchRedis: true means search redis to get the file in Celery, false means only search in ES
   async getAllFiles(kbId: string, searchRedis: boolean = true): Promise<Document[]> {
     try {
-      const response = await fetch(API_ENDPOINTS.knowledgeBase.listFiles(kbId, searchRedis));
+      const response = await fetch(API_ENDPOINTS.knowledgeBase.listFiles(kbId, searchRedis), {
+        headers: getAuthHeaders(),
+      });
       const result = await response.json();
 
       if (result.status !== "success") {

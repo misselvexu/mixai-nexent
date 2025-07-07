@@ -17,7 +17,7 @@ from typing import Optional, Generator, List, Dict, Any
 from openai import OpenAI
 from dotenv import load_dotenv
 import yaml
-from nexent.core.models.embedding_model import JinaEmbedding
+from nexent.core.models.embedding_model import JinaEmbedding, OpenAICompatibleEmbedding
 from nexent.vector_database.elasticsearch_core import ElasticSearchCore
 from nexent.core.nlp.tokenizer import calculate_term_weights
 from fastapi import HTTPException, Query, Body, Path, Depends
@@ -93,10 +93,19 @@ elastic_core = ElasticSearchCore(
 )
 
 
-def get_es_core():
-    # ensure embedding model is latest
-    elastic_core.embedding_model = JinaEmbedding(api_key=config_manager.get_config("EMBEDDING_API_KEY"))
-    return elastic_core
+def get_es(tenant_id: str):
+    # Get the tenant config
+    model_config = tenant_config_manager.get_model_config(key="EMBEDDING_ID", tenant_id=tenant_id)
+
+    model_type = model_config.get("model_type","")
+
+    if model_type == "embedding":
+        # Get the es core
+        return OpenAICompatibleEmbedding(api_key= model_config.get("api_key",""), base_url=model_config.get("base_url",""), model_name=model_config.get("model_name",""), embedding_dim=model_config.get("max_tokens", 0))
+    elif model_type == "multi_embedding":
+        return JinaEmbedding(api_key= model_config.get("api_key",""), base_url=model_config.get("base_url",""), model_name=model_config.get("model_name",""), embedding_dim=model_config.get("max_tokens", 0))
+    else:
+        return None
 
 
 class ElasticSearchService:
@@ -104,7 +113,7 @@ class ElasticSearchService:
     def create_index(
             index_name: str = Path(..., description="Name of the index to create"),
             embedding_dim: Optional[int] = Query(None, description="Dimension of the embedding vectors"),
-            es_core: ElasticSearchCore = Depends(get_es_core),
+            es_core: ElasticSearchCore = None,
             user_id: Optional[str] = Body(None, description="ID of the user creating the knowledge base"),
             tenant_id: Optional[str] = Body(None, description="ID of the tenant creating the knowledge base"),
     ):
@@ -123,7 +132,7 @@ class ElasticSearchService:
     @staticmethod
     def delete_index(
             index_name: str = Path(..., description="Name of the index to delete"),
-            es_core: ElasticSearchCore = Depends(get_es_core),
+            es_core: ElasticSearchCore = None,
             user_id: Optional[str] = Body(None, description="ID of the user delete the knowledge base"),
     ):
         try:
@@ -150,7 +159,7 @@ class ElasticSearchService:
             include_stats: bool = Query(False, description="Whether to include index stats"),
             user_id: Optional[str] = Body(None, description="ID of the user listing the knowledge base"),
             tenant_id: Optional[str] = Body(None, description="ID of the tenant listing the knowledge base"),
-            es_core: ElasticSearchCore = Depends(get_es_core)
+            es_core: ElasticSearchCore = None
     ):
         """
         List all indices that the current user has permissions to access.
@@ -204,7 +213,7 @@ class ElasticSearchService:
     @staticmethod
     def get_index_name(
             index_name: str = Path(..., description="Name of the index"),
-            es_core: ElasticSearchCore = Depends(get_es_core)
+            es_core: ElasticSearchCore = None,
     ):
         """
         Get detailed information about the index, including statistics, field mappings, file list, and processing information
@@ -272,7 +281,7 @@ class ElasticSearchService:
     def index_documents(
             index_name: str = Path(..., description="Name of the index"),
             data: List[Dict[str, Any]] = Body(..., description="Document List to process"),
-            es_core: ElasticSearchCore = Depends(get_es_core)
+            es_core: ElasticSearchCore = None
     ):
         """
         索引文档并创建向量嵌入，如果索引不存在则创建
@@ -383,7 +392,7 @@ class ElasticSearchService:
             index_name: str = Path(..., description="Name of the index"),
             include_chunks: bool = Query(False, description="Whether to include text chunks for each file"),
             search_redis: bool = Query(True, description="Whether to search Redis to get incomplete files"),
-            es_core: ElasticSearchCore = Depends(get_es_core)
+            es_core: ElasticSearchCore = None
     ):
         """
         Get file list for the specified index, including files that are not yet stored in ES
@@ -510,8 +519,11 @@ class ElasticSearchService:
     def delete_documents(
             index_name: str = Path(..., description="Name of the index"),
             path_or_url: str = Query(..., description="Path or URL of documents to delete"),
-            es_core: ElasticSearchCore = Depends(get_es_core)
+            es_core: ElasticSearchCore = None,
+            tenant_id: Optional[str] = Body(None, description="ID of the tenant listing the knowledge base")
     ):
+        if not es_core:
+            es_core = get_es(tenant_id)
         deleted_count = es_core.delete_documents_by_path_or_url(index_name, path_or_url)
         return {"status": "success", "deleted_count": deleted_count}
 
@@ -519,7 +531,7 @@ class ElasticSearchService:
     # Search Operations
     def accurate_search(
             request: SearchRequest = Body(..., description="Search request parameters"),
-            es_core: ElasticSearchCore = Depends(get_es_core)
+            es_core: ElasticSearchCore = None,
     ):
         """
         Search documents in multiple indices using fuzzy text matching
@@ -563,7 +575,7 @@ class ElasticSearchService:
     @staticmethod
     def semantic_search(
             request: SearchRequest = Body(..., description="Search request parameters"),
-            es_core: ElasticSearchCore = Depends(get_es_core)
+            es_core: ElasticSearchCore = None,
     ):
         """
         Search for similar documents in multiple indices using vector similarity
@@ -607,7 +619,7 @@ class ElasticSearchService:
     @staticmethod
     def hybrid_search(
             request: HybridSearchRequest = Body(..., description="Hybrid search request parameters"),
-            es_core: ElasticSearchCore = Depends(get_es_core)
+            es_core: ElasticSearchCore = None,
     ):
         """
         Search for similar documents in multiple indices using hybrid search
@@ -654,7 +666,7 @@ class ElasticSearchService:
             raise HTTPException(status_code=500, detail=f"Error during hybrid search: {str(e)}")
 
     @staticmethod
-    def health_check(es_core: ElasticSearchCore = Depends(get_es_core)):
+    def health_check(es_core: ElasticSearchCore = None, tenant_id: Optional[str] = Body(None, description="ID of the tenant listing the knowledge base")):
         """
         Check the health status of the API and Elasticsearch
 
@@ -664,6 +676,8 @@ class ElasticSearchService:
         Returns:
             Response containing health status information
         """
+        if not es_core:
+            es_core = get_es(tenant_id)
         try:
             # 尝试列出索引作为健康检查
             indices = es_core.get_user_indices()
@@ -678,11 +692,13 @@ class ElasticSearchService:
     async def summary_index_name(self,
             index_name: str = Path(..., description="Name of the index to get documents from"),
             batch_size: int = Query(1000, description="Number of documents to retrieve per batch"),
-            es_core: ElasticSearchCore = Depends(get_es_core),
+            es_core: Optional[ElasticSearchCore] = None,
             user_id: Optional[str] = Body(None, description="ID of the user delete the knowledge base"),
             tenant_id: Optional[str] = Body(None, description="ID of the tenant"),
             language: str = 'zh'
     ):
+        if not es_core:
+            es_core = get_es(tenant_id)
         try:
             # get all document
             all_documents = ElasticSearchService.get_random_documents(index_name, batch_size, es_core)
@@ -728,7 +744,7 @@ class ElasticSearchService:
     def get_random_documents(
             index_name: str = Path(..., description="Name of the index to get documents from"),
             batch_size: int = Query(1000, description="Maximum number of documents to retrieve"),
-            es_core: ElasticSearchCore = Depends(get_es_core)
+            es_core: ElasticSearchCore = None
     ):
         """
         Get random sample of documents from the specified index
